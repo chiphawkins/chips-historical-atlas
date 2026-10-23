@@ -1,0 +1,103 @@
+<!doctype html><html lang="en-US"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chip's Historical Atlas | Europe, Asia & North Africa</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><style>
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,-apple-system,Segoe UI,sans-serif;color:#243043;background:#f6f8fa}header{padding:12px 18px;background:#14283b;color:white;display:flex;align-items:baseline;gap:18px}header h1{font-size:19px;margin:0}header small{color:#b8c9d8}main{display:grid;grid-template-columns:310px 1fr;height:calc(100vh - 53px)}aside{overflow:auto;padding:18px;background:white;border-right:1px solid #dce2e8}#map{height:100%;width:100%}h2{font-size:14px;margin:22px 0 9px}p{line-height:1.45;color:#526174}label{display:block;margin:11px 0}input[type=range]{width:100%;accent-color:#a34e30}select,button{padding:9px;border:1px solid #ccd4dc;border-radius:6px;background:white;color:#243043}button{cursor:pointer}button:hover{background:#eef3f8}.row{display:flex;align-items:center;justify-content:space-between;gap:10px}.year{font-size:26px;font-weight:750;color:#923e24}.muted{font-size:12px;color:#6a7888}.status{border-radius:6px;background:#f0f3f6;padding:10px;margin:12px 0;font-size:12px;line-height:1.5}.legend{display:flex;gap:8px;align-items:center;margin:9px 0}.swatch{width:29px;border-top:3px solid #314e72}.historical{border-top:4px solid #c21f32}.country-label{color:#213c5c;font-size:11px;font-weight:750;text-shadow:0 1px white,1px 0 white,-1px 0 white,0 -1px white;white-space:nowrap}.historical-label{color:#b10f24;font-size:12px;font-weight:800;text-shadow:0 1px white,1px 0 white,-1px 0 white,0 -1px white;white-space:nowrap}.leaflet-tooltip.country-tooltip,.leaflet-tooltip.historical-tooltip{border:0;box-shadow:none;background:transparent;padding:0}.leaflet-tooltip:before{display:none}#details{white-space:pre-line;line-height:1.5}.footer{margin-top:24px;font-size:11px;color:#66768a}a{color:#24618a}@media(max-width:750px){main{grid-template-columns:1fr;grid-template-rows:310px 1fr}aside{order:2}#map{order:1}header small{display:none}}
+</style></head><body><header><h1>Chip's Historical Atlas</h1><small>Physical geography · Modern countries · Historical states</small></header><main><aside><div class="row"><strong>Historical year</strong><span id="yearText" class="year">1500 CE</span></div><input id="year" type="range" min="500" max="1900" value="1500" step="1" aria-label="Historical year"><div class="row muted"><span>500 CE</span><span>1900 CE</span></div><p class="muted">The slider selects the closest available historical snapshot at or before the chosen year; it does not interpolate borders.</p><div class="row"><button id="prev">◀ Previous snapshot</button><button id="next">Next snapshot ▶</button></div><h2>Map layers</h2><label><input type="checkbox" id="physical" checked> Physical geography / terrain</label><label><input type="checkbox" id="modern" checked> Modern national boundaries (always available)</label><label><input type="checkbox" id="modernLabels" checked> US English modern country names</label><label><input type="checkbox" id="historical" checked> Historical political boundaries</label><label><input type="checkbox" id="historicalLabels" checked> Historical territory names (red)</label><label for="opacity">Historical fill transparency: <strong id="opacityText">16%</strong> opacity</label><input type="range" id="opacity" min="0" max="75" value="16" step="1"><div class="legend"><span class="swatch"></span>Modern borders</div><div class="legend"><span class="swatch historical"></span>Historical borders</div><div class="status" id="status">Loading available historical snapshots…</div><h2>Selected territory</h2><div id="details" class="status">Click a modern country or historical territory to inspect its data.</div><h2>Data quality</h2><p class="muted">Historical snapshots are approximate reconstructions and may omit duchies, principalities or city-states. A snapshot does not imply comprehensive coverage. Modern borders are a contemporary reference, not historical claims.</p><div class="footer">Modern polygons: <a href="https://github.com/datasets/geo-countries" target="_blank">Natural Earth via geo-countries</a> (public domain). Historical polygons: <a href="https://github.com/aourednik/historical-basemaps" target="_blank">Historical Basemaps</a> (GPL-3.0). Basemap tiles: OpenStreetMap contributors / CARTO or OpenTopoMap. This demonstration loads remote data and requires an internet connection.</div></aside><div id="map" aria-label="Interactive historical map"></div></main><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script>
+const $=id=>document.getElementById(id), base='https://raw.githubusercontent.com/aourednik/historical-basemaps/master/';
+const atlasBounds=L.latLngBounds([[16,-26],[73,105]]);
+const map=L.map('map',{preferCanvas:true,worldCopyJump:false,maxBounds:atlasBounds,maxBoundsViscosity:1,minZoom:3});
+map.fitBounds([[19,-20],[72,98]],{padding:[8,8]});
+const light=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png',{attribution:'&copy; OpenStreetMap contributors &copy; CARTO',maxZoom:19}).addTo(map);
+const topo=L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap contributors, SRTM | OpenTopoMap (CC-BY-SA)',maxZoom:17});
+const modernGroup=L.layerGroup().addTo(map), modernLabelGroup=L.layerGroup().addTo(map), historicalGroup=L.layerGroup().addTo(map), historicalLabelGroup=L.layerGroup().addTo(map);
+let index=[],modernData=null,historicalData=null,currentYear=null,request=0;
+const historicalCache=new Map();
+function safeText(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function visibleInAtlas(f){try{let b=L.geoJSON(f).getBounds();return b.isValid()&&atlasBounds.intersects(b)}catch(e){return false}}
+// Explicit US-English modern-country display names. Historical names are unaffected.
+const overrides={
+ 'Türkiye':'Turkey','Turkey':'Turkey','Czechia':'Czech Republic','Czech Republic':'Czech Republic',
+ 'Russian Federation':'Russia','United States of America':'United States',
+ 'Republic of Korea':'South Korea','Democratic Republic of the Congo':'Democratic Republic of the Congo',
+ 'United Republic of Tanzania':'Tanzania','Viet Nam':'Vietnam','Lao PDR':'Laos',
+ 'Syrian Arab Republic':'Syria','Iran (Islamic Republic of)':'Iran',
+ 'Côte d’Ivoire':'Ivory Coast',"Côte d'Ivoire":'Ivory Coast',
+ 'Timor-Leste':'East Timor','Republic of North Macedonia':'North Macedonia',
+ 'Macedonia':'North Macedonia','Kyrgyz Republic':'Kyrgyzstan',
+ 'Republic of Moldova':'Moldova','Bosnia and Herz.':'Bosnia and Herzegovina',
+ 'The Netherlands':'Netherlands','Slovak Republic':'Slovakia',
+ 'UK':'United Kingdom','United Kingdom of Great Britain and Northern Ireland':'United Kingdom',
+ 'Republic of Türkiye':'Turkey','Eswatini':'Swaziland'
+};
+const excludedLabels=new Set(['Åland','Aland','Faroe Islands','Isle of Man','Jersey','Guernsey',
+ 'Gibraltar','Akrotiri','Dhekelia','Akrotiri and Dhekelia','Baykonur Cosmodrome',
+ 'Baikonur Cosmodrome','Siachen Glacier','Bir Tawil','United States Minor Outlying Islands']);
+function english(p){const n=p.NAME_EN||p.ADMIN||p.name_en||p.name||p.NAME||'Unnamed country';return overrides[n]||n}
+function primaryBounds(layer){
+ if(!(layer instanceof L.FeatureGroup))return layer.getBounds();
+ let best=null,area=-1;
+ layer.eachLayer(part=>{if(typeof part.getBounds!=='function')return;const b=part.getBounds();
+ const size=(b.getNorth()-b.getSouth())*(b.getEast()-b.getWest())*Math.max(.1,Math.cos(b.getCenter().lat*Math.PI/180));
+ if(size>area){area=size;best=b}});
+ return best||layer.getBounds();
+}
+function updateVisibility(){[['modern',modernGroup],['modernLabels',modernLabelGroup],['historical',historicalGroup],['historicalLabels',historicalLabelGroup]].forEach(([id,layer])=>$(id).checked?layer.addTo(map):map.removeLayer(layer)); if($('physical').checked){map.removeLayer(light);topo.addTo(map);topo.bringToBack()}else{map.removeLayer(topo);light.addTo(map);light.bringToBack()}}
+function popup(name,other){$('details').textContent=name+'\n'+other}
+function addModern(data){
+ modernData=data;modernGroup.clearLayers();modernLabelGroup.clearLayers();
+ L.geoJSON(data,{style:{color:'#29496e',weight:1.2,opacity:.88,fillOpacity:0},
+ onEachFeature:(f,l)=>{
+  const p=f.properties||{},name=english(p);
+  l.on('click',()=>popup(name,'Modern country (current reference)'));
+  if(excludedLabels.has(name))return;
+  const b=primaryBounds(l);
+  if(!b||!b.isValid())return;
+  const c=b.getCenter();
+  if(atlasBounds.contains(c))L.marker(c,{icon:L.divIcon({className:'country-label',html:safeText(name),iconSize:null}),interactive:false}).addTo(modernLabelGroup);
+ }}).addTo(modernGroup);
+ updateVisibility();
+}
+function drawHistorical(data,yr){historicalData=data;historicalGroup.clearLayers();historicalLabelGroup.clearLayers();let count=0;L.geoJSON(data,{filter:visibleInAtlas,style:f=>({color:'#c21f32',weight:2.3,opacity:1,fillColor:'#e86a70',fillOpacity:Number($('opacity').value)/100}),onEachFeature:(f,l)=>{count++;let p=f.properties||{},name=p.NAME||p.name||'Unnamed territory';l.on('click',()=>popup(name,'Historical snapshot: '+yr+' CE\nOverarching power: '+(p.SUBJECTO||'Not specified')+'\nPart of: '+(p.PARTOF||'Not specified')+'\nBoundary precision: '+(p.BORDERPRECISION||'Not specified')));const b=l.getBounds();if(b.isValid()){let c=b.getCenter();if(atlasBounds.contains(c))L.marker(c,{icon:L.divIcon({className:'historical-label',html:safeText(name),iconSize:null}),interactive:false}).addTo(historicalLabelGroup)}}}).addTo(historicalGroup);$('status').textContent='Showing '+yr+' CE snapshot ('+count+' polygons in the atlas region). Red borders and labels denote historical entities. Coverage varies by date and location.';updateVisibility()}
+function closest(y){let eligible=index.filter(e=>e.year<=y);return eligible.length?eligible[eligible.length-1]:index[0]}
+async function selectYear(y){$('yearText').textContent=y+' CE';if(!index.length)return;const entry=closest(y);if(currentYear===entry.year)return;currentYear=entry.year;let token=++request;$('status').textContent='Loading historical boundaries for '+entry.year+' CE…';try{let data=historicalCache.get(entry.url);if(!data){const r=await fetch(entry.url);if(!r.ok)throw Error('HTTP '+r.status);data=await r.json();historicalCache.set(entry.url,data)}if(token===request)drawHistorical(data,entry.year)}catch(e){if(token===request)$('status').textContent='Historical data unavailable: '+e.message+'. Try another year.'}}
+$('year').addEventListener('input',e=>selectYear(+e.target.value));$('opacity').addEventListener('input',e=>{$('opacityText').textContent=e.target.value+'%';historicalGroup.eachLayer(l=>{if(l.setStyle)l.setStyle({fillOpacity:Number(e.target.value)/100})})});['physical','modern','modernLabels','historical','historicalLabels'].forEach(id=>$(id).addEventListener('change',updateVisibility));
+function jump(direction){if(!index.length)return;const now=closest(+$('year').value).year;let pos=index.findIndex(e=>e.year===now);pos=Math.max(0,Math.min(index.length-1,pos+direction));$('year').value=index[pos].year;selectYear(index[pos].year)}$('prev').onclick=()=>jump(-1);$('next').onclick=()=>jump(1);
+// Discover actual historical GeoJSON snapshots directly from the public GitHub repository.
+// The repository does not provide a dependable index.json manifest.
+async function discoverSnapshots(){
+ const endpoints=[
+  'https://api.github.com/repos/aourednik/historical-basemaps/git/trees/master?recursive=1',
+  'https://api.github.com/repos/aourednik/historical-basemaps/git/trees/main?recursive=1'
+ ];
+ let lastError;
+ for(const endpoint of endpoints){
+  try{
+   const r=await fetch(endpoint,{headers:{'Accept':'application/vnd.github+json'}});
+   if(!r.ok)throw Error('GitHub API HTTP '+r.status);
+   const tree=(await r.json()).tree||[];
+   const found=tree.filter(e=>e.type==='blob'&&/\.geojson$/i.test(e.path)&&/geojson\//i.test(e.path)).map(e=>{
+    const filename=e.path.split('/').pop();
+    const match=filename.match(/(?:^|[_-])(-?\d{3,4})(?=\.geojson$)/i);
+    if(!match)return null;
+    const year=Number(match[1]);
+    if(year<500||year>1900)return null;
+    return {year,filename,url:'https://raw.githubusercontent.com/aourednik/historical-basemaps/'+(endpoint.includes('/master?')?'master':'main')+'/'+e.path};
+   }).filter(Boolean).sort((a,b)=>a.year-b.year);
+   if(found.length)return found;
+   throw Error('No dated GeoJSON snapshots found in repository tree');
+  }catch(e){lastError=e}
+ }
+ throw lastError||Error('Historical snapshots could not be discovered');
+}
+(async()=>{
+ const results=await Promise.allSettled([
+  fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson').then(r=>{if(!r.ok)throw Error('Modern borders HTTP '+r.status);return r.json()}),
+  discoverSnapshots()
+ ]);
+ if(results[0].status==='fulfilled')addModern(results[0].value);
+ else $('details').textContent='Modern boundary download failed: '+results[0].reason;
+ if(results[1].status==='fulfilled'){
+  index=results[1].value;
+  $('status').textContent='Found '+index.length+' historical snapshots. Loading selected year…';
+  selectYear(+$('year').value);
+ }else $('status').textContent='Historical boundary data unavailable: '+results[1].reason+'. Modern map remains usable.';
+})();
+</script></body></html>
